@@ -47,7 +47,7 @@ from trac.util.text import pretty_size, obfuscate_email_address, \
                            javascript_quote, exception_to_unicode
 from trac.util.datefmt import pretty_timedelta, format_datetime, format_date, \
                               format_time, from_utimestamp, http_date, utc
-from trac.util.translation import _
+from trac.util.translation import _, get_available_locales
 from trac.web.api import IRequestHandler, ITemplateStreamFilter, HTTPNotFound
 from trac.web.href import Href
 from trac.wiki import IWikiSyntaxProvider
@@ -211,14 +211,14 @@ class INavigationContributor(Interface):
         """
 
     def get_navigation_items(req):
-        """Should return an iterable object over the list of navigation items to
-        add, each being a tuple in the form (category, name, text).
+        """Should return an iterable object over the list of navigation items
+        to add, each being a tuple in the form (category, name, text).
         """
 
 
 class ITemplateProvider(Interface):
     """Extension point interface for components that provide their own
-    ClearSilver templates and accompanying static resources.
+    Genshi templates and accompanying static resources.
     """
 
     def get_htdocs_dirs():
@@ -266,6 +266,17 @@ class Chrome(Component):
         environments `templates` directory, but the latter take precedence.
         
         (''since 0.11'')""")
+ 
+    shared_htdocs_dir = PathOption('inherit', 'htdocs_dir', '',
+        """Path to the //shared htdocs directory//.
+        
+        Static resources in that directory are mapped to /chrome/shared
+        under the environment URL, in addition to common and site locations.
+        
+        This can be useful in site.html for common interface customization
+        of multiple Trac environments.
+        
+        (''since 0.13'')""")
 
     auto_reload = BoolOption('trac', 'auto_reload', False,
         """Automatically reload template files after modification.""")
@@ -382,7 +393,11 @@ class Chrome(Component):
         except ImportError:
             babel = None
         if babel is not None:
-            yield 'Babel', get_pkginfo(babel).get('version')
+            info = get_pkginfo(babel).get('version')
+            if not get_available_locales():
+                info += " (translations unavailable)" # No i18n on purpose
+                self.log.warning("Locale data is missing")
+            yield 'Babel', info
 
     # IEnvironmentSetupParticipant methods
 
@@ -454,6 +469,7 @@ class Chrome(Component):
 
     def get_htdocs_dirs(self):
         return [('common', pkg_resources.resource_filename('trac', 'htdocs')),
+                ('shared', self.shared_htdocs_dir), 
                 ('site', self.env.get_htdocs_dir())]
 
     def get_templates_dirs(self):
@@ -771,6 +787,7 @@ class Chrome(Component):
             self.templates = TemplateLoader(
                 self.get_all_templates_dirs(), auto_reload=self.auto_reload,
                 max_cache_size=self.genshi_cache_size,
+                default_encoding="utf-8",
                 variable_lookup='lenient', callback=lambda template:
                 Translator(translation.get_translations()).setup(template))
 
@@ -844,7 +861,7 @@ class Chrome(Component):
 
         try:
             buffer = StringIO()
-            stream.render(method, doctype=doctype, out=buffer)
+            stream.render(method, doctype=doctype, out=buffer, encoding="utf-8")
             return buffer.getvalue().translate(_translate_nop,
                                                _invalid_control_chars)
         except Exception, e:
